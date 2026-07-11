@@ -50,9 +50,9 @@ ENTRY_SCORE = 0.60     # combined confluence score (-1..+1) needed to open a lon
 EXIT_SCORE = -0.10     # combined score below which an open long exits early — tighter, cuts losers sooner
 ATR_PERIOD = 14
 TP_MULT = 2.5          # take profit a bit sooner than before
-SL_MULT = 1.0          # tighter stop-loss (was 1.5) — smaller loss per losing trade
+SL_MULT = 0.75          # tighter stop-loss (was 1.5) — smaller loss per losing trade
 BASE_TRADE_USD = 5.0   # smaller base size (was 7.0)
-MAX_TRADE_EQUITY_FRACTION = 0.08   # cap per-trade risk at 8% of equity (was 15%)
+MAX_TRADE_EQUITY_FRACTION = 0.90   # cap per-trade risk at 8% of equity (was 15%)
 MIN_ORDER_USD = 5.0
 
 # Volume top-up parameters. The competition requires averaging $2,500/day over 7 days
