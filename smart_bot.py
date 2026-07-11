@@ -60,7 +60,7 @@ MIN_ORDER_USD = 5.0
 # testing shows the cost budget can't sustain more; raise it once you've confirmed the
 # realized cost per round trip on your account.
 TARGET_DAILY_VOLUME = float(os.environ.get("TARGET_DAILY_VOLUME", 2000.0))
-MAX_ROUND_TRIP_COST_PCT = 0.004   # skip a round trip if the cheapest coin's estimated cost exceeds this (was 0.006)
+MAX_ROUND_TRIP_COST_PCT = 0.008   # skip a round trip if the cheapest coin's estimated cost exceeds this (was 0.006)
 MAX_LEG_USD = 25.0     # smaller cap per round trip (was 50.0)
 
 
