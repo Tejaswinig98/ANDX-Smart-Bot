@@ -1,0 +1,64 @@
+name: train-model
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC — retrains BTC and ETH so neither model goes stale.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      coins:
+        description: "Comma-separated coins to train (e.g. BTC,ETH or just ETH)"
+        default: "BTC,ETH"
+        required: false
+      days:
+        description: "Days of history to train on"
+        default: "720"
+        required: false
+
+permissions:
+  contents: write   # needed to commit the refreshed model(s) back
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      coins: ${{ steps.list.outputs.coins }}
+    steps:
+      - id: list
+        run: |
+          raw="${{ github.event.inputs.coins || 'BTC,ETH' }}"
+          json=$(python3 -c "import json,sys; print(json.dumps([c.strip() for c in '$raw'.split(',') if c.strip()]))")
+          echo "coins=$json" >> "$GITHUB_OUTPUT"
+
+  train:
+    needs: prep
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1   # one coin at a time, so each commit+push is clean before the next starts
+      matrix:
+        coin: ${{ fromJson(needs.prep.outputs.coins) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Train model
+        run: |
+          python train_model.py \
+            --coin "${{ matrix.coin }}" \
+            --days "${{ github.event.inputs.days || '720' }}"
+
+      - name: Commit refreshed model
+        run: |
+          git config user.name "trading-bot"
+          git config user.email "trading-bot@users.noreply.github.com"
+          git pull --rebase --autostash
+          git add "model_${{ matrix.coin }}.pkl" "model_meta_${{ matrix.coin }}.json"
+          git diff --cached --quiet || git commit -m "retrain model (${{ matrix.coin }}) [skip ci]"
+          git push

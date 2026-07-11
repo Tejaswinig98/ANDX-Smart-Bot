@@ -1,0 +1,16 @@
+# Secrets — never commit this. Credentials are injected from GitHub Secrets instead.
+.env
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# NOTE: state.json, risk_state.json, volume_log.json, model.pkl, and model_meta.json
+# are intentionally NOT ignored here. GitHub Actions runners are stateless — each run
+# starts from a fresh checkout — so the bot's position, risk counters, volume log, and
+# trained model must be committed back to the repo by the workflow after each run, or
+# the bot forgets everything between ticks. See .github/workflows/ and the "Run it on
+# GitHub" section of README.md.

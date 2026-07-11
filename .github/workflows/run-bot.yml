@@ -1,0 +1,67 @@
+name: run-bot
+
+on:
+  schedule:
+    # Runs at :07 past every hour (offset from :00 to avoid GitHub's peak-minute delays).
+    - cron: "7 * * * *"
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+
+# Only one tick at a time across this AND volume-topup.yml — never let two workflows
+# (or two coins within this one, see max-parallel below) race on the same ANDX account.
+concurrency:
+  group: andx-bot-trading
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # needed to commit the updated state/risk/volume files back
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1   # run each coin's tick one at a time, never simultaneously
+      matrix:
+        coin: [BTC, ETH]   # add more coins here once you've trained a model for them
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write .env from secrets
+        run: |
+          cat > .env << EOF
+          ANDX_USER_NAME=${{ secrets.ANDX_USER_NAME }}
+          ANDX_TOKEN=${{ secrets.ANDX_TOKEN }}
+          ANDX_API_KEY=${{ secrets.ANDX_API_KEY }}
+          ANDX_API_SECRET=${{ secrets.ANDX_API_SECRET }}
+          ANDX_PASSPHRASE=${{ secrets.ANDX_PASSPHRASE }}
+          EOF
+
+      - name: Check model is trained
+        run: |
+          if [ ! -f "model_${{ matrix.coin }}.pkl" ]; then
+            echo "::error::model_${{ matrix.coin }}.pkl is missing. Run the 'train-model' workflow for this coin first (Actions tab -> train-model -> Run workflow, set coin=${{ matrix.coin }}), then re-run this."
+            exit 1
+          fi
+
+      - name: Run one bot tick
+        env:
+          COIN: ${{ matrix.coin }}
+        run: python main.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "trading-bot"
+          git config user.email "trading-bot@users.noreply.github.com"
+          git pull --rebase --autostash
+          for f in state_${{ matrix.coin }}.json risk_state.json volume_log.json; do
+            [ -f "$f" ] && git add "$f"
+          done
+          git diff --cached --quiet || git commit -m "bot tick (${{ matrix.coin }}): update state [skip ci]"
+          git push

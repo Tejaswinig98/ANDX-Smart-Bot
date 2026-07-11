@@ -1,0 +1,57 @@
+name: volume-topup
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub's actual cron granularity/timing can drift a few
+    # minutes under load — that's fine, the pacing math in volume_topup.py adapts.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+# Shares a group with run-bot.yml so the two workflows never execute against the
+# ANDX account at the same time.
+concurrency:
+  group: andx-bot-trading
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  topup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write .env from secrets
+        run: |
+          cat > .env << EOF
+          ANDX_USER_NAME=${{ secrets.ANDX_USER_NAME }}
+          ANDX_TOKEN=${{ secrets.ANDX_TOKEN }}
+          ANDX_API_KEY=${{ secrets.ANDX_API_KEY }}
+          ANDX_API_SECRET=${{ secrets.ANDX_API_SECRET }}
+          ANDX_PASSPHRASE=${{ secrets.ANDX_PASSPHRASE }}
+          EOF
+
+      - name: Run volume top-up tick
+        env:
+          COIN: BTC   # which coin does the round trip this run; volume pacing is account-wide either way
+        run: python volume_topup.py
+
+      - name: Commit updated risk/volume state
+        run: |
+          git config user.name "trading-bot"
+          git config user.email "trading-bot@users.noreply.github.com"
+          git pull --rebase --autostash
+          for f in risk_state.json volume_log.json; do
+            [ -f "$f" ] && git add "$f"
+          done
+          git diff --cached --quiet || git commit -m "volume top-up: update state [skip ci]"
+          git push

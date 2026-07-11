@@ -1,0 +1,59 @@
+name: smart-bot
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      target_daily_volume:
+        description: "Daily volume target in USD"
+        default: "2000"
+        required: false
+
+# Shares a group with run-bot.yml / volume-topup.yml so nothing races against the
+# ANDX account. If you're switching to smart-bot.yml, disable the other two workflows
+# (Actions tab -> workflow -> ... -> Disable workflow) so they don't also trade.
+concurrency:
+  group: andx-bot-trading
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write .env from secrets
+        run: |
+          cat > .env << EOF
+          ANDX_USER_NAME=${{ secrets.ANDX_USER_NAME }}
+          ANDX_TOKEN=${{ secrets.ANDX_TOKEN }}
+          ANDX_API_KEY=${{ secrets.ANDX_API_KEY }}
+          ANDX_API_SECRET=${{ secrets.ANDX_API_SECRET }}
+          ANDX_PASSPHRASE=${{ secrets.ANDX_PASSPHRASE }}
+          EOF
+
+      - name: Run smart bot tick
+        env:
+          TARGET_DAILY_VOLUME: ${{ github.event.inputs.target_daily_volume || '2000' }}
+        run: python smart_bot.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "trading-bot"
+          git config user.email "trading-bot@users.noreply.github.com"
+          git pull --rebase --autostash
+          git add state_*.json risk_state.json volume_log.json spread_cost_log.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "smart-bot tick: update state [skip ci]"
+          git push
