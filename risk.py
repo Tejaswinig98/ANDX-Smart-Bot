@@ -20,14 +20,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Self-imposed limits, buffered below ANDX's hard suspension/disqualification lines.
-DAILY_LOSS_HALT = 0.08     # halt new entries once the day is down 8%
-WEEKLY_LOSS_HALT = 0.15    # halt new entries once the week is down 15%
+DAILY_LOSS_HALT = 0.04     # halt new entries once the day is down 4%
+WEEKLY_LOSS_HALT = 0.07    # halt new entries once the week is down 7%
 
 # Hard, permanent ceiling: total loss from your very first recorded balance. Once
 # breached, ALL new entries stay halted indefinitely — not just for 24h — until you
 # manually clear it (delete risk_state.json's "baseline_equity"/"permanent_halt" keys,
 # or the whole file, once you've reviewed what happened and decided to keep going).
-ABSOLUTE_LOSS_HALT = 0.25
+ABSOLUTE_LOSS_HALT = 0.10
 RISK_STATE_PATH = Path(__file__).parent / "risk_state.json"
 VOLUME_LOG_PATH = Path(__file__).parent / "volume_log.json"
 
