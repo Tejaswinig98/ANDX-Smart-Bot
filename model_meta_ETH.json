@@ -1,0 +1,24 @@
+{
+  "coin": "ETH",
+  "feature_columns": [
+    "ret_1",
+    "ret_3",
+    "ret_6",
+    "ret_12",
+    "ret_24",
+    "ema_diff",
+    "rsi_14",
+    "macd_diff",
+    "bb_pct",
+    "atr_pct",
+    "vol_zscore",
+    "volatility_20",
+    "momentum_10"
+  ],
+  "horizon_bars": 4,
+  "label_threshold": 0.0025,
+  "trained_at": 1783775206,
+  "test_auc": 0.5381,
+  "train_rows": 14651,
+  "test_rows": 2586
+}
