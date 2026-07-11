@@ -5,5 +5,5 @@
   "halted_until": 0,
   "week_start_day": "2026-07-11",
   "week_start_equity": 58.2234691700924,
-  "permanent_halt": false
+  "permanent_halt": true
 }
