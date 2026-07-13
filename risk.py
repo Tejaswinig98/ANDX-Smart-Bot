@@ -74,11 +74,22 @@ def save_risk_state(state):
     RISK_STATE_PATH.write_text(json.dumps(state, indent=2))
 
 
+# Hard dollar floor: never let equity drop to or below this, regardless of percentage
+# math. Unlike ABSOLUTE_LOSS_HALT above, this is evaluated fresh every tick, not
+# sticky — trading halts while equity is at/below the floor and resumes automatically
+# once it's back above, since that's the literal meaning of "don't go below $X".
+MIN_EQUITY_FLOOR_USD = 75.0
+
+
 def check(equity_now):
     """Evaluate drawdown limits for the current equity; return (state, halted, reason).
     Persists any day/week rollover. Does NOT persist a halt trigger itself — call
     save_risk_state(state) after, once the caller has finished acting on the result."""
     state = load_risk_state(equity_now)
+
+    if equity_now <= MIN_EQUITY_FLOOR_USD:
+        return state, True, (f"EQUITY FLOOR: equity ${equity_now:.2f} is at/below your "
+                              f"${MIN_EQUITY_FLOOR_USD:.2f} floor — no new trades until it recovers above it.")
 
     # Absolute ceiling first: once total loss from baseline_equity hits 25%, halt
     # permanently — this does NOT reset daily/weekly and stays on until you manually
