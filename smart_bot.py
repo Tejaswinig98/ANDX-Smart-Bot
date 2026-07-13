@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 import feed
 import model as model_lib
 import risk
+import screener
 import signals
 import spread
 from andx_api import ANDX, APIError
@@ -39,8 +40,16 @@ load_dotenv(HERE / ".env")
 # listed on ANDX. Extend this list once you've trained a model for a new coin (a
 # model isn't required — coins without one just trade on technicals alone — but ML
 # does improve entry quality per the earlier backtests).
-COINS = ["BTC", "ETH", "SOL", "XRP"]
+# Coin selection is now dynamic (see screener.py): each run, the top N recent
+# performers from a ~60-coin candidate pool are picked to actually trade. "Performer"
+# means trailing price momentum over the last day — the honest, implementable meaning
+# of "profitable" here; nothing can predict future returns. Coins without a trained
+# ML model (only the original 11 have one) still trade on technicals alone via
+# signals.py's fallback. The screener re-scans the full pool at most once per hour
+# (see screener.REFRESH_MINUTES) and caches results, so most ticks are cheap.
 QUOTE = "USDT"
+ACTIVE_COIN_COUNT = 5   # how many top performers to actually trade each cycle
+
 
 WARMUP = 150   # bars of history needed before SMA(50)/indicators are trustworthy
 
@@ -50,18 +59,20 @@ ENTRY_SCORE = 0.60     # combined confluence score (-1..+1) needed to open a lon
 EXIT_SCORE = -0.10     # combined score below which an open long exits early — tighter, cuts losers sooner
 ATR_PERIOD = 14
 TP_MULT = 2.5          # take profit a bit sooner than before
-SL_MULT = 0.75          # tighter stop-loss (was 1.5) — smaller loss per losing trade
+SL_MULT = 0.75         # tighter still (was 1.0) — larger trade sizes need faster loss cutoffs
 BASE_TRADE_USD = 5.0   # smaller base size (was 7.0)
-MAX_TRADE_EQUITY_FRACTION = 0.90   # cap per-trade risk at 8% of equity (was 15%)
+MAX_TRADE_EQUITY_FRACTION = 0.90   # can use up to 90% of equity per trade (was 8%) — see the
+                                   # README's risk-tradeoff note: bigger size means a bad move
+                                   # between ticks can cost more before the bot can react
 MIN_ORDER_USD = 5.0
 
-# Volume top-up parameters. The competition requires averaging $2,500/day over 7 days
-# to qualify — set below the requested $2,000 default here on purpose only if your own
-# testing shows the cost budget can't sustain more; raise it once you've confirmed the
-# realized cost per round trip on your account.
+# Volume top-up parameters. Per explicit request: trade every tick regardless of pace,
+# stopping only on the loss ceiling above — not on a cost or pacing budget. Each tick
+# scans the current candidate coins live and round-trips whichever is cheapest.
 TARGET_DAILY_VOLUME = float(os.environ.get("TARGET_DAILY_VOLUME", 2000.0))
-MAX_ROUND_TRIP_COST_PCT = 0.008   # skip a round trip if the cheapest coin's estimated cost exceeds this (was 0.006)
-MAX_LEG_USD = 25.0     # smaller cap per round trip (was 50.0)
+SANITY_MAX_COST_PCT = 0.03    # only skip entirely if even the cheapest coin looks broken/abnormal (3%+)
+MAX_LEG_USD = 40.0             # cap per round trip
+LEG_EQUITY_FRACTION = 0.15     # size each round trip as this fraction of equity, for volume without over-committing
 
 
 def build_client():
@@ -220,47 +231,37 @@ def pace_shortfall_usd():
     return expected_by_now - done_today, done_today
 
 
-def volume_topup(api, equity_quote, day_start_equity):
-    """Round-trip the currently cheapest coin, sized to close the day's pacing
-    shortfall — but capped by both the per-trip cost ceiling and the remaining daily
-    spread-cost budget. Skips entirely if neither allows a meaningful trade."""
-    shortfall, done_today = pace_shortfall_usd()
-    if shortfall <= 0:
-        print(f"volume on pace: ${done_today:.2f}/{TARGET_DAILY_VOLUME:.0f} today — no top-up needed")
+def volume_topup(api, equity_quote, day_start_equity, candidate_coins):
+    """Always execute one round trip per tick, on whichever coin in candidate_coins
+    is currently cheapest to round-trip. No pacing or cost-budget gate — trading
+    happens every call by design; the only thing that can stop it is every single
+    candidate's quote looking broken/abnormal at once (SANITY_MAX_COST_PCT) or
+    genuinely insufficient balance. Overall risk is bounded by risk.check()'s loss
+    ceiling in run(), not by anything in this function."""
+    coin, cost = spread.cheapest_coin(api, candidate_coins, QUOTE)
+    if coin is None:
+        print("volume top-up: couldn't get a quote for any candidate coin this tick — skipping")
         return 0.0
 
-    best_coin, best_cost = spread.cheapest_coin(api, COINS, QUOTE)
-    if best_coin is None:
-        print("volume top-up: couldn't get quotes for any coin — skipping this tick")
+    if cost > SANITY_MAX_COST_PCT:
+        print(f"volume top-up: even the cheapest coin ({coin}) looks abnormal ({cost:.2%}, "
+              f"likely a bad tick or wide market) — skipping this tick")
         return 0.0
 
-    if best_cost > MAX_ROUND_TRIP_COST_PCT:
-        print(f"volume top-up: cheapest coin ({best_coin}) still costs {best_cost:.2%} per "
-              f"round trip, above the {MAX_ROUND_TRIP_COST_PCT:.2%} ceiling — skipping rather "
-              f"than paying it")
-        return 0.0
-
-    budget_remaining = risk.spread_cost_budget_remaining(day_start_equity)
-    if budget_remaining <= 0:
-        print("volume top-up: today's spread-cost budget is used up — skipping for the rest of today")
-        return 0.0
-
-    leg_usd = shortfall / 2
-    leg_usd = max(leg_usd, MIN_ORDER_USD)
-    max_leg_by_cost_budget = budget_remaining / best_cost if best_cost > 0 else MAX_LEG_USD
     quote_bal = api.get_available(QUOTE)
-    leg_usd = min(leg_usd, MAX_LEG_USD, max_leg_by_cost_budget, quote_bal - 0.50)
+    leg_usd = equity_quote * LEG_EQUITY_FRACTION
+    leg_usd = min(leg_usd, MAX_LEG_USD, quote_bal - 0.50)
+    leg_usd = max(leg_usd, MIN_ORDER_USD)
 
-    if leg_usd < MIN_ORDER_USD:
-        print(f"volume top-up: cost budget / balance too tight for a meaningful round trip "
-              f"(budget_left=${budget_remaining:.2f}, spendable=${quote_bal:.2f}) — skipping")
+    if leg_usd < MIN_ORDER_USD or quote_bal < MIN_ORDER_USD:
+        print(f"volume top-up: not enough spendable {QUOTE} (${quote_bal:.2f}) for a round "
+              f"trip on {coin} — skipping this tick")
         return 0.0
 
-    print(f"volume top-up: behind pace by ${shortfall:.2f}, cheapest coin is {best_coin} "
-          f"(~{best_cost:.2%}/trip) — running a ${leg_usd:.2f} round trip")
+    print(f"volume top-up: {coin} is cheapest right now (~{cost:.2%}/trip) — running a ${leg_usd:.2f} round trip")
 
-    buy_quote = api.get_quote(best_coin, QUOTE, f"{leg_usd:.2f}")
-    buy_order = api.place_instant_order(best_coin, QUOTE, buy_quote["sell_currency_amount"],
+    buy_quote = api.get_quote(coin, QUOTE, f"{leg_usd:.2f}")
+    buy_order = api.place_instant_order(coin, QUOTE, buy_quote["sell_currency_amount"],
                                         buy_quote["buy_currency_amount"], buy_quote["visible_price"])
     if confirm_status(api, buy_order["order_number"]) != "F":
         print("  buy leg didn't fill — aborting round trip")
@@ -268,8 +269,8 @@ def volume_topup(api, equity_quote, day_start_equity):
     coin_bought = float(buy_quote["buy_currency_amount"])
     buy_usd = float(buy_quote["sell_currency_amount"])
 
-    sell_quote = api.get_quote(QUOTE, best_coin, f"{coin_bought:.8f}")
-    sell_order = api.place_instant_order(QUOTE, best_coin, sell_quote["sell_currency_amount"],
+    sell_quote = api.get_quote(QUOTE, coin, f"{coin_bought:.8f}")
+    sell_order = api.place_instant_order(QUOTE, coin, sell_quote["sell_currency_amount"],
                                          sell_quote["buy_currency_amount"], sell_quote["visible_price"])
     if confirm_status(api, sell_order["order_number"]) != "F":
         print("  sell leg didn't fill — coin balance left open, check manually")
@@ -277,17 +278,46 @@ def volume_topup(api, equity_quote, day_start_equity):
 
     sell_usd = float(sell_quote["buy_currency_amount"])
     realized_cost = max(buy_usd - sell_usd, 0.0)
-    risk.log_spread_cost(realized_cost)
+    risk.log_spread_cost(realized_cost)   # still logged for visibility, no longer a gate
     print(f"  round trip filled: ${buy_usd + sell_usd:.2f} volume, realized cost ${realized_cost:.2f}")
     return buy_usd + sell_usd
+
+
+def coins_with_open_positions():
+    """Coins with a LONG position recorded in their state_<coin>.json, regardless of
+    whether they're currently in the screener's top performers — these must keep
+    being checked for exit even if they've since fallen out of favor, or they'd become
+    an orphaned position nobody manages."""
+    import json
+    coins = []
+    for path in HERE.glob("state_*.json"):
+        coin = path.stem.replace("state_", "")
+        try:
+            state = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if state.get("position") == "LONG":
+            coins.append(coin)
+    return coins
 
 
 def run():
     api = build_client()
 
+    active_coins, scanned_at = screener.top_performers(n=ACTIVE_COIN_COUNT)
+    open_coins = coins_with_open_positions()
+    coins_to_manage = sorted(set(active_coins) | set(open_coins))
+    extra_open = sorted(set(open_coins) - set(active_coins))
+    print(f"screener: top {ACTIVE_COIN_COUNT} by trailing 24h momentum: {active_coins}"
+          + (f"  (+ still managing open positions: {extra_open})" if extra_open else ""))
+
+    if not coins_to_manage:
+        print("no coins with positive momentum and no open positions — nothing to manage this tick")
+        return
+
     # Rough prices for equity valuation — use a cheap quote rather than a full feed fetch.
     prices = {}
-    for coin in COINS:
+    for coin in coins_to_manage:
         try:
             q = api.get_quote(coin, QUOTE, f"{MIN_ORDER_USD:.2f}")
             prices[coin] = float(q["visible_price"])
@@ -304,14 +334,18 @@ def run():
         return
 
     total_volume = 0.0
-    for coin in COINS:
+    for coin in coins_to_manage:
         try:
             total_volume += directional_tick(api, coin, equity)
         except APIError as error:
             print(f"[{coin}] ANDX error: {error}")
 
+    # Volume top-up prefers the screener's currently-profitable coins; if none show
+    # positive momentum this cycle, fall back to the full candidate pool so a round
+    # trip can still happen (per the "always trade" requirement) rather than stalling.
+    topup_candidates = active_coins if active_coins else screener.CANDIDATE_POOL
     try:
-        total_volume += volume_topup(api, equity, day_start_equity)
+        total_volume += volume_topup(api, equity, day_start_equity, topup_candidates)
     except APIError as error:
         print(f"volume top-up: ANDX error: {error}")
 
