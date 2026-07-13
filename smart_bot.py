@@ -120,10 +120,37 @@ def save_state(coin, state):
 
 def portfolio_equity_quote(api, prices):
     """Total account value in QUOTE terms: quote balance + every coin's balance marked
-    at its current price. `prices` is {coin: price}."""
+    at its current price. `prices` is {coin: price} — kept for backward compatibility,
+    no longer used for the real equity check in run() (see full_account_equity)."""
     total = api.get_available(QUOTE)
     for coin, price in prices.items():
         total += api.get_available(coin) * price
+    return total
+
+
+def full_account_equity(api):
+    """The REAL equity check: ANDX has no 'list all balances' endpoint, so the only
+    reliable way to value the account is to check every coin the bot could ever have
+    bought — which is always a coin from screener.CANDIDATE_POOL, since that's the
+    only set of coins any BUY ever happens from. Checking just this cycle's 5 screened
+    coins (the original bug) silently ignored real money sitting in any coin that
+    isn't currently a top performer, making equity read far lower than reality.
+    Costs ~60 lightweight balance checks per tick, plus one price quote for each coin
+    that actually has a nonzero balance (most will be zero and skip the quote)."""
+    total = api.get_available(QUOTE)
+    for coin in screener.CANDIDATE_POOL:
+        try:
+            balance = api.get_available(coin)
+        except APIError:
+            continue
+        if not balance or balance <= 0:
+            continue
+        try:
+            q = api.get_quote(coin, QUOTE, f"{MIN_ORDER_USD:.2f}")
+            price = float(q["visible_price"])
+        except APIError:
+            price = 0.0
+        total += balance * price
     return total
 
 
@@ -323,15 +350,10 @@ def run():
         return
 
     # Rough prices for equity valuation — use a cheap quote rather than a full feed fetch.
-    prices = {}
-    for coin in coins_to_manage:
-        try:
-            q = api.get_quote(coin, QUOTE, f"{MIN_ORDER_USD:.2f}")
-            prices[coin] = float(q["visible_price"])
-        except APIError:
-            prices[coin] = 0.0
-
-    equity = portfolio_equity_quote(api, prices)
+   # Real equity check: scans every coin the bot could ever hold, not just this
+    # cycle's 5 screened picks (see full_account_equity's docstring for why the old
+    # subset-based check silently undercounted real money).
+    equity = full_account_equity(api)
     risk_state, halted, reason = risk.check(equity)
     day_start_equity = risk_state.get("day_start_equity") or equity
     risk.save_risk_state(risk_state)
