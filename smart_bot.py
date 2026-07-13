@@ -77,6 +77,7 @@ LEG_FLOOR_BUFFER_FRACTION = 0.90   # use up to this much of the room above the $
                                     # spread cost (a fraction of a percent), not the whole notional —
                                     # the cash comes right back on the sell leg a few seconds later.
 
+
 def build_client():
     return ANDX(
         os.environ.get("ANDX_USER_NAME", ""),
@@ -136,6 +137,7 @@ def position_size(score, equity_quote):
     raw = BASE_TRADE_USD * (1 + confidence)
     buffer_above_floor = max(equity_quote - risk.MIN_EQUITY_FLOOR_USD, 0.0)
     cap = min(equity_quote * MAX_TRADE_EQUITY_FRACTION, buffer_above_floor)
+    return min(raw, cap)
 
 
 def directional_tick(api, coin, equity_quote):
@@ -252,7 +254,7 @@ def volume_topup(api, equity_quote, day_start_equity, candidate_coins):
               f"likely a bad tick or wide market) — skipping this tick")
         return 0.0
 
-  quote_bal = api.get_available(QUOTE)
+    quote_bal = api.get_available(QUOTE)
     buffer_above_floor = max(equity_quote - risk.MIN_EQUITY_FLOOR_USD, 0.0)
     leg_usd = buffer_above_floor * LEG_FLOOR_BUFFER_FRACTION
     leg_usd = min(leg_usd, MAX_LEG_USD, quote_bal - 0.50)
