@@ -71,9 +71,11 @@ MIN_ORDER_USD = 5.0
 # scans the current candidate coins live and round-trips whichever is cheapest.
 TARGET_DAILY_VOLUME = float(os.environ.get("TARGET_DAILY_VOLUME", 2000.0))
 SANITY_MAX_COST_PCT = 0.03    # only skip entirely if even the cheapest coin looks broken/abnormal (3%+)
-MAX_LEG_USD = 40.0             # cap per round trip
-LEG_EQUITY_FRACTION = 0.15     # size each round trip as this fraction of equity, for volume without over-committing
-
+MAX_LEG_USD = 100.0            # cap per round trip (raised — see floor-based sizing below)
+LEG_FLOOR_BUFFER_FRACTION = 0.90   # use up to this much of the room above the $75 floor per round trip.
+                                    # Safe to be aggressive here: a round trip's real risk is just its
+                                    # spread cost (a fraction of a percent), not the whole notional —
+                                    # the cash comes right back on the sell leg a few seconds later.
 
 def build_client():
     return ANDX(
@@ -126,12 +128,14 @@ def portfolio_equity_quote(api, prices):
 
 def position_size(score, equity_quote):
     """Scale trade size with confluence strength above ENTRY_SCORE, capped by equity
-    fraction and floored at the exchange minimum."""
+    fraction AND by the room above the $75 floor (directional trades carry real
+    downside risk if the stop-loss gaps, unlike a round trip), floored at the
+    exchange minimum."""
     confidence = max(0.0, (score - ENTRY_SCORE) / (1 - ENTRY_SCORE))
     confidence = min(confidence, 1.0)
     raw = BASE_TRADE_USD * (1 + confidence)
-    cap = equity_quote * MAX_TRADE_EQUITY_FRACTION
-    return min(raw, cap)
+    buffer_above_floor = max(equity_quote - risk.MIN_EQUITY_FLOOR_USD, 0.0)
+    cap = min(equity_quote * MAX_TRADE_EQUITY_FRACTION, buffer_above_floor)
 
 
 def directional_tick(api, coin, equity_quote):
@@ -248,8 +252,9 @@ def volume_topup(api, equity_quote, day_start_equity, candidate_coins):
               f"likely a bad tick or wide market) — skipping this tick")
         return 0.0
 
-    quote_bal = api.get_available(QUOTE)
-    leg_usd = equity_quote * LEG_EQUITY_FRACTION
+  quote_bal = api.get_available(QUOTE)
+    buffer_above_floor = max(equity_quote - risk.MIN_EQUITY_FLOOR_USD, 0.0)
+    leg_usd = buffer_above_floor * LEG_FLOOR_BUFFER_FRACTION
     leg_usd = min(leg_usd, MAX_LEG_USD, quote_bal - 0.50)
     leg_usd = max(leg_usd, MIN_ORDER_USD)
 
