@@ -33,7 +33,7 @@ class ANDX:
 
     # --- /p/v1/ token auth: quote + order ---
 
-   def _post(self, path, payload):
+    def _post(self, path, payload):
         """POST a token-signed request; return the data field or raise APIError."""
         body = json.dumps(payload)
         ts = str(int(time.time() * 1000))
@@ -47,6 +47,11 @@ class ANDX:
             response.raise_for_status()
             result = response.json()
         except requests.exceptions.RequestException as error:
+            # Covers HTTPError (4xx/5xx server errors like the 500 we saw), timeouts,
+            # connection failures, etc. — anything that isn't a clean, parseable
+            # ANDX response gets normalized to APIError so every existing
+            # "except APIError" call site in the codebase handles it gracefully
+            # instead of the whole script crashing on an unexpected exception type.
             raise APIError(f"{path} -> request failed: {error}")
         except ValueError as error:
             raise APIError(f"{path} -> malformed response: {error}")
@@ -54,6 +59,7 @@ class ANDX:
             raise APIError(f"{path} -> {result.get('reason')}")
         data = result["data"]
         return data
+
     def get_quote(self, buy_code, sell_code, sell_amount):
         """Fresh quote for selling `sell_amount` of sell_code into buy_code."""
         quote = self._post("/p/v1/order/get_depth_limits_and_amounts/",
@@ -93,6 +99,7 @@ class ANDX:
             raise APIError(f"{path} -> {result.get('reason')}")
         data = result["data"]
         return data
+
     def get_available(self, currency, account="Main"):
         """Spendable balance (float) for one currency."""
         data = self._get(f"/api/v1/balance/{account}/")
@@ -105,4 +112,3 @@ class ANDX:
         data = self._get(f"/api/v1/order_status/{order_number}/")
         status = data["order"]["status"]
         return status
-
