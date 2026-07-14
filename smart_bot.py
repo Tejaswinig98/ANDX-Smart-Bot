@@ -166,27 +166,6 @@ def position_size(score, equity_quote):
     cap = min(equity_quote * MAX_TRADE_EQUITY_FRACTION, buffer_above_floor)
     return min(raw, cap)
 
-def coins_with_real_balance(api, min_usd=MIN_ORDER_USD):
-    """Scan the full candidate pool for coins with an actual, meaningfully-sized
-    balance right now — this is what catches money sitting in a coin that isn't
-    currently a top performer and was never explicitly tracked as an open position
-    (e.g. leftover from manual trading, or a coin the screener dropped a while ago)."""
-    found = []
-    for coin in screener.CANDIDATE_POOL:
-        try:
-            balance = api.get_available(coin)
-        except APIError:
-            continue
-        if not balance or balance <= 0:
-            continue
-        try:
-            q = api.get_quote(coin, QUOTE, f"{MIN_ORDER_USD:.2f}")
-            price = float(q["visible_price"])
-        except APIError:
-            continue
-        if balance * price >= min_usd:
-            found.append(coin)
-    return found
 
 def directional_tick(api, coin, equity_quote):
     """Check/execute one coin's directional entry or exit. Returns USD volume traded
@@ -209,6 +188,12 @@ def directional_tick(api, coin, equity_quote):
         return 0.0
 
     state = load_state(coin)
+
+    # Adopt orphaned holdings: a real balance sitting in this coin that isn't tracked
+    # as an open LONG position (leftover from manual trading, an earlier fixed-coin
+    # era, or a coin that's since dropped out of the screener). Without this, such
+    # balances sit inert forever — the FLAT branch below only ever considers BUYING,
+    # never selling something the bot didn't itself just track as "long".
     if state.get("position") != "LONG":
         held = 0.0
         try:
@@ -223,9 +208,10 @@ def directional_tick(api, coin, equity_quote):
             if atr_adopt and atr_adopt > 0:
                 tp_adopt, sl_adopt = price + TP_MULT * atr_adopt, price - SL_MULT * atr_adopt
             else:
-                tp_adopt, sl_adopt = price * 1.05, price * 0.95
+                tp_adopt, sl_adopt = price * 1.05, price * 0.95   # fallback if ATR isn't available
             state = {"position": "LONG", "entry_price": price, "tp_price": tp_adopt, "sl_price": sl_adopt}
             save_state(coin, state)
+
     tag = (f"sma={conf.sma_signal:+d} rsi={conf.rsi_signal:+d} bb={conf.bb_signal:+d} "
            f"macd={conf.macd_signal:+d} ml={'y' if conf.ml_valid else 'n'}({conf.prob_up:.2f}) "
            f"combined={conf.combined:+.2f}")
@@ -373,6 +359,29 @@ def coins_with_open_positions():
     return coins
 
 
+def coins_with_real_balance(api, min_usd=MIN_ORDER_USD):
+    """Scan the full candidate pool for coins with an actual, meaningfully-sized
+    balance right now — this is what catches money sitting in a coin that isn't
+    currently a top performer and was never explicitly tracked as an open position
+    (e.g. leftover from manual trading, or a coin the screener dropped a while ago)."""
+    found = []
+    for coin in screener.CANDIDATE_POOL:
+        try:
+            balance = api.get_available(coin)
+        except APIError:
+            continue
+        if not balance or balance <= 0:
+            continue
+        try:
+            q = api.get_quote(coin, QUOTE, f"{MIN_ORDER_USD:.2f}")
+            price = float(q["visible_price"])
+        except APIError:
+            continue
+        if balance * price >= min_usd:
+            found.append(coin)
+    return found
+
+
 def run():
     api = build_client()
 
@@ -391,8 +400,7 @@ def run():
         print("no coins with positive momentum and no open positions — nothing to manage this tick")
         return
 
-    # Rough prices for equity valuation — use a cheap quote rather than a full feed fetch.
-   # Real equity check: scans every coin the bot could ever hold, not just this
+    # Real equity check: scans every coin the bot could ever hold, not just this
     # cycle's 5 screened picks (see full_account_equity's docstring for why the old
     # subset-based check silently undercounted real money).
     equity = full_account_equity(api)
