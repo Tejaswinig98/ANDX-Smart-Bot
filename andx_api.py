@@ -79,16 +79,20 @@ class ANDX:
         sign = hmac.new(self.secret.encode(), msg.encode(), hashlib.sha256).hexdigest().upper()
         headers = {"ACCESS-KEY": self.key, "ACCESS-USER": self.user, "ACCESS-PASSPHRASE": self.passphrase,
                    "ACCESS-TIMESTAMP": ts, "ACCESS-SIGN": sign, "content-type": "application/json"}
-        response = self.session.get(self.BASE + path, headers=headers, timeout=self.timeout)
-        if response.status_code == 401:
-            raise APIError("ANDX api key rejected (401)")
-        response.raise_for_status()
-        result = response.json()
+        try:
+            response = self.session.get(self.BASE + path, headers=headers, timeout=self.timeout)
+            if response.status_code == 401:
+                raise APIError("ANDX api key rejected (401)")
+            response.raise_for_status()
+            result = response.json()
+        except requests.exceptions.RequestException as error:
+            raise APIError(f"{path} -> request failed: {error}")
+        except ValueError as error:
+            raise APIError(f"{path} -> malformed response: {error}")
         if result.get("status") != "success":
             raise APIError(f"{path} -> {result.get('reason')}")
         data = result["data"]
         return data
-
     def get_available(self, currency, account="Main"):
         """Spendable balance (float) for one currency."""
         data = self._get(f"/api/v1/balance/{account}/")
