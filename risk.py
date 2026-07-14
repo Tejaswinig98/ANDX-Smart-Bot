@@ -82,44 +82,19 @@ MIN_EQUITY_FLOOR_USD = 75.0
 
 
 def check(equity_now):
-    """Evaluate drawdown limits for the current equity; return (state, halted, reason).
-    Persists any day/week rollover. Does NOT persist a halt trigger itself — call
-    save_risk_state(state) after, once the caller has finished acting on the result."""
+    """Evaluate risk for the current equity; return (state, halted, reason).
+    Persists any day/week rollover (kept for logging/reference). The ONLY thing that
+    halts trading now is the $75 floor below — no more daily/weekly/permanent
+    percentage-based halts, per explicit request. Simpler and more permissive: as
+    long as equity is above $75, trading continues regardless of how much was lost
+    to get there."""
     state = load_risk_state(equity_now)
 
     if equity_now <= MIN_EQUITY_FLOOR_USD:
         return state, True, (f"EQUITY FLOOR: equity ${equity_now:.2f} is at/below your "
                               f"${MIN_EQUITY_FLOOR_USD:.2f} floor — no new trades until it recovers above it.")
 
-    # Absolute ceiling first: once total loss from baseline_equity hits 25%, halt
-    # permanently — this does NOT reset daily/weekly and stays on until you manually
-    # clear it, unlike the halts below.
-    baseline = state.get("baseline_equity") or equity_now
-    absolute_loss = (baseline - equity_now) / baseline if baseline else 0
-    if state.get("permanent_halt") or absolute_loss >= ABSOLUTE_LOSS_HALT:
-        state["permanent_halt"] = True
-        return state, True, (f"PERMANENT HALT: total loss {absolute_loss:.0%} from starting "
-                              f"balance ${baseline:.2f} >= your {ABSOLUTE_LOSS_HALT:.0%} ceiling. "
-                              f"Trading stays off until you manually review and clear risk_state.json.")
-
-    now_ts = time.time()
-    if state["halted_until"] > now_ts:
-        remaining_h = (state["halted_until"] - now_ts) / 3600
-        return state, True, f"self-imposed daily halt active ({remaining_h:.1f}h remaining)"
-
-    day_start = state["day_start_equity"] or equity_now
-    daily_loss = (day_start - equity_now) / day_start if day_start else 0
-    if daily_loss >= DAILY_LOSS_HALT:
-        state["halted_until"] = now_ts + 24 * 3600
-        return state, True, f"daily loss {daily_loss:.0%} >= {DAILY_LOSS_HALT:.0%} halt threshold"
-
-    week_start = state["week_start_equity"] or equity_now
-    weekly_loss = (week_start - equity_now) / week_start if week_start else 0
-    if weekly_loss >= WEEKLY_LOSS_HALT:
-        return state, True, f"weekly loss {weekly_loss:.0%} >= {WEEKLY_LOSS_HALT:.0%} halt threshold"
-
     return state, False, ""
-
 
 def log_trade_volume(usd_amount):
     """Append an executed trade's USD notional, for tracking progress toward the
