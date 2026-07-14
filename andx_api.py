@@ -33,23 +33,27 @@ class ANDX:
 
     # --- /p/v1/ token auth: quote + order ---
 
-    def _post(self, path, payload):
+   def _post(self, path, payload):
         """POST a token-signed request; return the data field or raise APIError."""
         body = json.dumps(payload)
         ts = str(int(time.time() * 1000))
         sign = hmac.new(self.token.encode(), (self.user + ts + body).encode(), hashlib.sha256).hexdigest().upper()
         headers = {"access-user": self.user, "access-timestamp": ts, "access-sign": sign,
                    "Content-Type": "application/json"}
-        response = self.session.post(self.BASE + path, data=body, headers=headers, timeout=self.timeout)
-        if response.status_code == 401:
-            raise APIError("ANDX token expired (401)")
-        response.raise_for_status()
-        result = response.json()
+        try:
+            response = self.session.post(self.BASE + path, data=body, headers=headers, timeout=self.timeout)
+            if response.status_code == 401:
+                raise APIError("ANDX token expired (401)")
+            response.raise_for_status()
+            result = response.json()
+        except requests.exceptions.RequestException as error:
+            raise APIError(f"{path} -> request failed: {error}")
+        except ValueError as error:
+            raise APIError(f"{path} -> malformed response: {error}")
         if result.get("status") != "success":
             raise APIError(f"{path} -> {result.get('reason')}")
         data = result["data"]
         return data
-
     def get_quote(self, buy_code, sell_code, sell_amount):
         """Fresh quote for selling `sell_amount` of sell_code into buy_code."""
         quote = self._post("/p/v1/order/get_depth_limits_and_amounts/",
