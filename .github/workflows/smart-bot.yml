@@ -49,7 +49,7 @@ jobs:
           TARGET_DAILY_VOLUME: ${{ github.event.inputs.target_daily_volume || '2000' }}
         run: python smart_bot.py
 
-   - name: Commit updated state
+      - name: Commit updated state
         run: |
           git config user.name "trading-bot"
           git config user.email "trading-bot@users.noreply.github.com"
