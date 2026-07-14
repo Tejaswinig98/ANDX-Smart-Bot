@@ -1,6 +1,6 @@
 {
-  "position": "LONG",
-  "entry_price": 0.2151,
-  "tp_price": 0.22288986368786856,
-  "sl_price": 0.21276304089363945
+  "position": "FLAT",
+  "entry_price": 0,
+  "tp_price": 0,
+  "sl_price": 0
 }
