@@ -17,8 +17,8 @@
   ],
   "horizon_bars": 4,
   "label_threshold": 0.0025,
-  "trained_at": 1785145802,
-  "test_auc": 0.5311,
+  "trained_at": 1785750124,
+  "test_auc": 0.5381,
   "train_rows": 14651,
   "test_rows": 2586
 }
