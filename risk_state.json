@@ -1,9 +1,9 @@
 {
   "baseline_equity": 93.5426987328526,
-  "day": "2026-08-17",
+  "day": "2026-08-18",
   "day_start_equity": 25.0,
   "halted_until": 0,
-  "week_start_day": "2026-08-11",
-  "week_start_equity": 71.3848754629675,
+  "week_start_day": "2026-08-18",
+  "week_start_equity": 25.0,
   "permanent_halt": false
 }
